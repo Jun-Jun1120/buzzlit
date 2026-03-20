@@ -44,16 +44,15 @@ class JobStatus(BaseModel):
 @app.post("/api/generate")
 async def generate(
     video: UploadFile = File(...),
-    business_type: str = Form("restaurant"),
+    business_type: str = Form("auto"),
+    custom_prompt: str = Form(""),
 ) -> dict:
     """Upload video and start generation."""
-    # Validate file
     if not video.content_type or not video.content_type.startswith("video/"):
         raise HTTPException(400, "File must be a video")
 
     job_id = str(uuid.uuid4())[:8]
 
-    # Save uploaded file
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     ext = Path(video.filename or "video.mp4").suffix or ".mp4"
     upload_path = UPLOAD_DIR / f"{job_id}{ext}"
@@ -61,7 +60,6 @@ async def generate(
     with open(upload_path, "wb") as f:
         shutil.copyfileobj(video.file, f)
 
-    # Check file size
     size_mb = upload_path.stat().st_size / (1024 * 1024)
     if size_mb > MAX_UPLOAD_SIZE_MB:
         upload_path.unlink()
@@ -74,19 +72,17 @@ async def generate(
         "error": None,
     }
 
-    # Run in background
-    asyncio.create_task(_process_job(job_id, str(upload_path), business_type))
-
+    asyncio.create_task(_process_job(job_id, str(upload_path), business_type, custom_prompt))
     return {"job_id": job_id}
 
 
-async def _process_job(job_id: str, input_path: str, business_type: str) -> None:
+async def _process_job(job_id: str, input_path: str, business_type: str, custom_prompt: str = "") -> None:
     """Process video in background."""
     try:
         jobs[job_id]["progress"] = "音声を文字起こし中..."
 
         result = await asyncio.to_thread(
-            run_pipeline, input_path, business_type, job_id,
+            run_pipeline, input_path, business_type, job_id, custom_prompt,
         )
 
         jobs[job_id]["status"] = "completed"
@@ -101,7 +97,8 @@ async def _process_job(job_id: str, input_path: str, business_type: str) -> None
 
 class YouTubeRequest(BaseModel):
     url: str
-    business_type: str = "restaurant"
+    business_type: str = "auto"
+    custom_prompt: str = ""
 
 
 @app.post("/api/generate-from-url")
@@ -120,12 +117,14 @@ async def generate_from_url(req: YouTubeRequest) -> dict:
         "error": None,
     }
 
-    asyncio.create_task(_process_youtube_job(job_id, url, req.business_type))
+    asyncio.create_task(_process_youtube_job(job_id, url, req.business_type, req.custom_prompt))
 
     return {"job_id": job_id}
 
 
-async def _process_youtube_job(job_id: str, url: str, business_type: str) -> None:
+async def _process_youtube_job(
+    job_id: str, url: str, business_type: str, custom_prompt: str = "",
+) -> None:
     """Download YouTube video and process."""
     try:
         jobs[job_id]["progress"] = "YouTube動画をダウンロード中..."
@@ -137,10 +136,9 @@ async def _process_youtube_job(job_id: str, url: str, business_type: str) -> Non
         jobs[job_id]["progress"] = "音声を文字起こし中..."
 
         result = await asyncio.to_thread(
-            run_pipeline, str(video_path), business_type, job_id,
+            run_pipeline, str(video_path), business_type, job_id, custom_prompt,
         )
 
-        # Add YouTube metadata
         result["source_title"] = metadata.get("title", "")
         result["source_url"] = url
 

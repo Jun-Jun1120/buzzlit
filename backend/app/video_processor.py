@@ -162,58 +162,111 @@ def _find_bgm(business_type: str) -> Path | None:
     return None
 
 
+def _build_vertical_filter(src_w: int, src_h: int) -> str:
+    """Build FFmpeg filter for smart vertical conversion.
+
+    - Already vertical (9:16): just scale
+    - Horizontal (16:9): blurred background + centered original
+    - Square: blurred background + centered
+    """
+    target_ratio = SHORT_WIDTH / SHORT_HEIGHT  # 0.5625
+    src_ratio = src_w / src_h
+
+    if abs(src_ratio - target_ratio) < 0.1:
+        # Already roughly vertical
+        return f"scale={SHORT_WIDTH}:{SHORT_HEIGHT}:flags=lanczos"
+
+    # Horizontal or square: use blurred background
+    # 1. Scale + blur for background
+    # 2. Scale original to fit width
+    # 3. Overlay centered
+    return (
+        f"split[bg][fg];"
+        f"[bg]scale={SHORT_WIDTH}:{SHORT_HEIGHT}:force_original_aspect_ratio=increase,"
+        f"crop={SHORT_WIDTH}:{SHORT_HEIGHT},boxblur=20:5[bgblur];"
+        f"[fg]scale={SHORT_WIDTH}:-2:flags=lanczos[fgscaled];"
+        f"[bgblur][fgscaled]overlay=(W-w)/2:(H-h)/2"
+    )
+
+
 def process_video(
     input_path: str,
     output_path: str,
     transcription: Transcription,
-    business_type: str = "restaurant",
+    telop_style: str = "variety",
     hook_text: str = "",
+    start_time: float | None = None,
+    end_time: float | None = None,
 ) -> Path:
-    """Process uploaded video into SNS-ready short with telop and BGM."""
+    """Process video into SNS-ready short with smart vertical + telop."""
     out_path = Path(output_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     info = _get_video_info(input_path)
     src_w, src_h = info["width"], info["height"]
 
-    biz = BUSINESS_TYPES.get(business_type, BUSINESS_TYPES["restaurant"])
-    telop_style = biz.get("telop_style", "variety")
+    # Filter relevant transcript segments for this clip
+    if start_time is not None and end_time is not None:
+        clipped_segments = [
+            Segment(
+                text=s.text,
+                start=s.start - start_time,
+                end=s.end - start_time,
+                words=s.words,
+            )
+            for s in transcription.segments
+            if s.end > start_time and s.start < end_time
+        ]
+        # Clamp to clip boundaries
+        clipped_segments = [
+            Segment(
+                text=s.text,
+                start=max(0, s.start),
+                end=min(end_time - start_time, s.end),
+                words=s.words,
+            )
+            for s in clipped_segments
+        ]
+    else:
+        clipped_segments = list(transcription.segments)
 
-    # Generate ASS
+    # Generate ASS subtitles
     ass_content = _generate_ass(
-        list(transcription.segments),
+        clipped_segments,
         style=telop_style,
         hook_text=hook_text,
     )
     ass_path = out_path.with_suffix(".ass")
     ass_path.write_text(ass_content, encoding="utf-8")
 
-    # Build filter
-    crop = _build_crop_filter(src_w, src_h)
+    # Build vertical conversion filter
+    vertical_filter = _build_vertical_filter(src_w, src_h)
     ass_escaped = str(ass_path).replace("\\", "/").replace(":", "\\:")
 
-    vf = f"{crop},scale={SHORT_WIDTH}:{SHORT_HEIGHT}:flags=lanczos,ass='{ass_escaped}'"
+    # Combine filters
+    if "split[bg][fg]" in vertical_filter:
+        # Complex filter graph - append ASS to the output
+        vf_complex = f"{vertical_filter},ass='{ass_escaped}'"
+        use_filter_complex = True
+    else:
+        vf_complex = f"{vertical_filter},ass='{ass_escaped}'"
+        use_filter_complex = False
 
     # Build FFmpeg command
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", str(input_path),
-    ]
+    cmd = ["ffmpeg", "-y"]
 
-    # Add BGM if available
-    bgm_path = _find_bgm(business_type)
-    if bgm_path:
-        cmd.extend(["-i", str(bgm_path)])
+    # Time range
+    if start_time is not None:
+        cmd.extend(["-ss", str(start_time)])
+    if end_time is not None:
+        cmd.extend(["-to", str(end_time)])
 
-    cmd.extend(["-vf", vf])
+    cmd.extend(["-i", str(input_path)])
 
-    if bgm_path:
-        # Mix original audio with BGM (BGM at 15% volume)
-        cmd.extend([
-            "-filter_complex",
-            "[0:a]volume=1.0[a1];[1:a]volume=0.15[a2];[a1][a2]amix=inputs=2:duration=first[aout]",
-            "-map", "0:v", "-map", "[aout]",
-        ])
+    if use_filter_complex:
+        cmd.extend(["-filter_complex", vf_complex])
+    else:
+        cmd.extend(["-vf", vf_complex])
 
     cmd.extend([
         "-c:v", "libx264",
@@ -223,13 +276,10 @@ def process_video(
         "-b:a", "128k",
         "-r", str(SHORT_FPS),
         "-movflags", "+faststart",
-        "-shortest",
         str(out_path),
     ])
 
     subprocess.run(cmd, check=True, capture_output=True)
 
-    # Cleanup
     ass_path.unlink(missing_ok=True)
-
     return out_path
