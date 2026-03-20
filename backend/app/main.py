@@ -17,6 +17,7 @@ load_dotenv(Path(__file__).parent.parent.parent / ".env")
 
 from .config import OUTPUT_DIR, UPLOAD_DIR, MAX_UPLOAD_SIZE_MB
 from .pipeline import run_pipeline
+from .downloader import download_youtube
 
 app = FastAPI(title="Buzzlit API", version="0.1.0")
 
@@ -87,6 +88,61 @@ async def _process_job(job_id: str, input_path: str, business_type: str) -> None
         result = await asyncio.to_thread(
             run_pipeline, input_path, business_type, job_id,
         )
+
+        jobs[job_id]["status"] = "completed"
+        jobs[job_id]["progress"] = "完了!"
+        jobs[job_id]["result"] = result
+
+    except Exception as e:
+        jobs[job_id]["status"] = "failed"
+        jobs[job_id]["error"] = str(e)
+        jobs[job_id]["progress"] = f"エラー: {e}"
+
+
+class YouTubeRequest(BaseModel):
+    url: str
+    business_type: str = "restaurant"
+
+
+@app.post("/api/generate-from-url")
+async def generate_from_url(req: YouTubeRequest) -> dict:
+    """Generate from YouTube URL."""
+    url = req.url.strip()
+    if not url or "youtube.com" not in url and "youtu.be" not in url:
+        raise HTTPException(400, "Invalid YouTube URL")
+
+    job_id = str(uuid.uuid4())[:8]
+
+    jobs[job_id] = {
+        "status": "processing",
+        "progress": "YouTube動画をダウンロード中...",
+        "result": None,
+        "error": None,
+    }
+
+    asyncio.create_task(_process_youtube_job(job_id, url, req.business_type))
+
+    return {"job_id": job_id}
+
+
+async def _process_youtube_job(job_id: str, url: str, business_type: str) -> None:
+    """Download YouTube video and process."""
+    try:
+        jobs[job_id]["progress"] = "YouTube動画をダウンロード中..."
+
+        video_path, metadata = await asyncio.to_thread(
+            download_youtube, url, job_id,
+        )
+
+        jobs[job_id]["progress"] = "音声を文字起こし中..."
+
+        result = await asyncio.to_thread(
+            run_pipeline, str(video_path), business_type, job_id,
+        )
+
+        # Add YouTube metadata
+        result["source_title"] = metadata.get("title", "")
+        result["source_url"] = url
 
         jobs[job_id]["status"] = "completed"
         jobs[job_id]["progress"] = "完了!"
