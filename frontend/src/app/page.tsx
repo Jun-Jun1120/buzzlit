@@ -1,6 +1,9 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import Link from "next/link";
+import { loadSettings, type Settings } from "@/lib/settings";
+import { t } from "@/lib/i18n";
 
 type InputMode = "upload" | "youtube";
 
@@ -36,18 +39,41 @@ type JobStatus = {
   error: string | null;
 };
 
+/* ── Step indicator for processing ── */
+const STEPS = [
+  { key: "download", label: "Downloading" },
+  { key: "transcribe", label: "Transcribing" },
+  { key: "analyze", label: "AI Analyzing" },
+  { key: "render", label: "Rendering" },
+] as const;
+
+function getStepIndex(progress: string): number {
+  if (progress.includes("ダウンロード")) return 0;
+  if (progress.includes("文字起こし")) return 1;
+  if (progress.includes("分析") || progress.includes("AI")) return 2;
+  if (progress.includes("動画") || progress.includes("生成")) return 3;
+  return 1;
+}
+
 export default function Home() {
+  const [settings, setSettingsState] = useState<Settings | null>(null);
   const [inputMode, setInputMode] = useState<InputMode>("youtube");
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [youtubeUrl, setYoutubeUrl] = useState("");
   const [customPrompt, setCustomPrompt] = useState("");
+  const [showPrompt, setShowPrompt] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
   const [job, setJob] = useState<JobStatus | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
+  const [copied, setCopied] = useState(false);
   const [activeVideo, setActiveVideo] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { setSettingsState(loadSettings()); }, []);
+
+  const lang = settings?.uiLanguage ?? "ja";
+  const i = (key: Parameters<typeof t>[0]) => t(key, lang);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selected = e.target.files?.[0];
@@ -63,7 +89,6 @@ export default function Home() {
     setIsSubmitting(true);
     setJob(null);
     setActiveVideo(0);
-
     try {
       let res: Response;
       if (inputMode === "upload") {
@@ -82,6 +107,11 @@ export default function Home() {
             url: youtubeUrl.trim(),
             business_type: "auto",
             custom_prompt: customPrompt,
+            language: settings?.language ?? "ja",
+            caption_language: settings?.captionLanguage ?? "ja",
+            max_clips: settings?.maxClips ?? 3,
+            clip_duration: settings?.clipDuration ?? 45,
+            telop_style: settings?.telopStyle ?? "auto",
           }),
         });
       }
@@ -89,8 +119,7 @@ export default function Home() {
         const err = await res.json().catch(() => ({ detail: "Request failed" }));
         throw new Error(err.detail || "Request failed");
       }
-      const data = await res.json();
-      setJobId(data.job_id);
+      setJobId((await res.json()).job_id);
     } catch (err) {
       alert(`${err}`);
     } finally {
@@ -102,8 +131,7 @@ export default function Home() {
     if (!jobId) return;
     try {
       const res = await fetch(`/api/jobs/${jobId}`);
-      if (!res.ok) return;
-      setJob(await res.json());
+      if (res.ok) setJob(await res.json());
     } catch { /* ignore */ }
   }, [jobId]);
 
@@ -121,10 +149,9 @@ export default function Home() {
 
   const copyCaption = () => {
     if (!result) return;
-    const text = `${result.description}\n\n${result.hashtags.map((t) => `#${t}`).join(" ")}`;
-    navigator.clipboard.writeText(text);
-    setCopiedIdx(-1);
-    setTimeout(() => setCopiedIdx(null), 2000);
+    navigator.clipboard.writeText(`${result.description}\n\n${result.hashtags.map((t) => `#${t}`).join(" ")}`);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   const reset = () => {
@@ -137,239 +164,322 @@ export default function Home() {
   };
 
   return (
-    <main className="max-w-6xl mx-auto px-4 py-8 sm:py-12">
-      {/* Header */}
-      <header className="text-center mb-10">
-        <div className="inline-flex items-center gap-2 mb-4">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-orange-500 to-red-600" />
-          <h1 className="text-3xl font-bold tracking-tight">Buzzlit</h1>
-        </div>
-        <p className="text-gray-400 text-base max-w-md mx-auto">
-          動画からAIがバズるショート動画を自動生成。ジャンル自動判定、テロップ、キャプション付き。
-        </p>
-      </header>
+    <div className="min-h-screen relative overflow-hidden">
+      {/* Background effects */}
+      <div className="fixed inset-0 pointer-events-none">
+        <div className="absolute top-[-20%] left-[-10%] w-[500px] h-[500px] bg-orange-600/8 rounded-full blur-[120px]" style={{ animation: "pulse-slow 8s ease-in-out infinite" }} />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[400px] h-[400px] bg-red-600/6 rounded-full blur-[100px]" style={{ animation: "pulse-slow 10s ease-in-out infinite 2s" }} />
+        <div className="absolute top-[40%] left-[60%] w-[300px] h-[300px] bg-amber-500/4 rounded-full blur-[80px]" style={{ animation: "pulse-slow 12s ease-in-out infinite 4s" }} />
+      </div>
 
-      {result ? (
-        /* ── Result View ── */
-        <div className="space-y-6">
-          {/* Meta bar */}
-          <div className="flex items-center justify-between">
+      <main className="relative max-w-6xl mx-auto px-4 sm:px-6 py-8 sm:py-14">
+        {/* Header */}
+        <header className="mb-12">
+          <div className="flex items-center justify-between mb-5">
+            <div />
             <div className="flex items-center gap-3">
-              <span className="px-3 py-1 bg-orange-500/10 text-orange-400 rounded-full text-sm font-medium">
-                {result.genre_ja}
-              </span>
-              <span className="text-gray-500 text-sm">{result.videos.length} clips generated</span>
-              {result.source_title && (
-                <span className="text-gray-600 text-sm truncate max-w-xs">
-                  {result.source_title}
-                </span>
-              )}
+              <div className="relative">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-orange-500 via-red-500 to-rose-600 shadow-lg shadow-orange-500/20" />
+                <div className="absolute inset-0 w-10 h-10 rounded-xl bg-gradient-to-br from-orange-500 via-red-500 to-rose-600 blur-md opacity-40" />
+              </div>
+              <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-white">Buzzlit</h1>
             </div>
-            <button type="button" onClick={reset} className="text-sm text-gray-400 hover:text-white transition-colors">
-              New
-            </button>
+            <Link
+              href="/settings"
+              className="w-9 h-9 rounded-xl bg-zinc-800/60 border border-zinc-700/40 flex items-center justify-center hover:bg-zinc-700/60 hover:border-zinc-600/50 transition-all"
+              title={i("settings")}
+            >
+              <svg className="w-4 h-4 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+            </Link>
           </div>
+          <p className="text-zinc-500 text-sm sm:text-base max-w-lg mx-auto leading-relaxed text-center">
+            {i("tagline")}
+          </p>
+        </header>
 
-          <div className="grid lg:grid-cols-5 gap-6">
-            {/* Video Player - 3 cols */}
-            <div className="lg:col-span-3">
-              <div className="bg-gray-900 rounded-2xl overflow-hidden border border-gray-800">
-                <div className="aspect-[9/16] max-h-[600px] bg-black">
-                  {currentVideo && (
-                    <video
-                      key={currentVideo.url}
-                      src={currentVideo.url}
-                      controls
-                      autoPlay
-                      className="w-full h-full object-contain"
-                    />
+        {result ? (
+          /* ═══ RESULT VIEW ═══ */
+          <div className="space-y-6 animate-[float_0.5s_ease-out]">
+            {/* Top bar */}
+            <div className="flex items-center justify-between px-1">
+              <div className="flex items-center gap-3">
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-gradient-to-r from-orange-500/10 to-red-500/10 border border-orange-500/20 text-orange-400 rounded-full text-xs font-medium backdrop-blur-sm">
+                  <span className="w-1.5 h-1.5 rounded-full bg-orange-400" />
+                  {result.genre_ja}
+                </span>
+                <span className="text-zinc-600 text-xs">{result.videos.length} clips</span>
+              </div>
+              <button type="button" onClick={reset} className="px-4 py-1.5 text-xs text-zinc-500 hover:text-white border border-zinc-800 hover:border-zinc-700 rounded-lg transition-all hover:bg-zinc-900">
+                {i("btn_new")}
+              </button>
+            </div>
+
+            <div className="grid lg:grid-cols-12 gap-6">
+              {/* Player - 7 cols */}
+              <div className="lg:col-span-7">
+                <div className="bg-zinc-900/80 backdrop-blur-xl rounded-2xl border border-zinc-800/80 overflow-hidden shadow-2xl shadow-black/40">
+                  <div className="aspect-[9/16] max-h-[620px] bg-black relative">
+                    {currentVideo && (
+                      <video key={currentVideo.url} src={currentVideo.url} controls autoPlay className="w-full h-full object-contain" />
+                    )}
+                  </div>
+                  {result.videos.length > 1 && (
+                    <div className="flex gap-2 p-3 border-t border-zinc-800/50">
+                      {result.videos.map((v, i) => (
+                        <button
+                          key={v.filename}
+                          type="button"
+                          onClick={() => setActiveVideo(i)}
+                          className={`relative flex-1 py-2.5 rounded-xl text-xs font-medium transition-all ${
+                            i === activeVideo
+                              ? "bg-gradient-to-r from-orange-500 to-red-500 text-white shadow-lg shadow-orange-500/20"
+                              : "bg-zinc-800/80 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800"
+                          }`}
+                        >
+                          Clip {v.index}
+                          <span className="ml-1 opacity-60">{Math.round(v.duration)}s</span>
+                        </button>
+                      ))}
+                    </div>
                   )}
                 </div>
-                {/* Clip selector */}
-                {result.videos.length > 1 && (
-                  <div className="flex gap-2 p-4 overflow-x-auto">
-                    {result.videos.map((v, i) => (
-                      <button
-                        key={v.filename}
-                        type="button"
-                        onClick={() => setActiveVideo(i)}
-                        className={`flex-shrink-0 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                          i === activeVideo
-                            ? "bg-orange-500 text-white"
-                            : "bg-gray-800 text-gray-400 hover:bg-gray-700"
-                        }`}
-                      >
-                        Clip {v.index} ({Math.round(v.duration)}s)
-                      </button>
+              </div>
+
+              {/* Info panel - 5 cols */}
+              <div className="lg:col-span-5 space-y-4">
+                {/* Caption card */}
+                <div className="bg-zinc-900/80 backdrop-blur-xl rounded-2xl border border-zinc-800/80 p-6 shadow-xl">
+                  <div className="flex items-start justify-between mb-4">
+                    <h2 className="font-semibold text-lg text-white leading-tight">{result.title}</h2>
+                    <span className="text-[10px] text-zinc-600 uppercase tracking-wider flex-shrink-0 ml-3">{result.telop_style}</span>
+                  </div>
+                  <p className="text-zinc-400 text-sm leading-relaxed whitespace-pre-wrap mb-5">{result.description}</p>
+                  <div className="flex flex-wrap gap-1.5 mb-5">
+                    {result.hashtags.map((tag) => (
+                      <span key={tag} className="px-2.5 py-1 bg-zinc-800/80 text-zinc-400 rounded-lg text-[11px] border border-zinc-700/50">#{tag}</span>
                     ))}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={copyCaption}
+                    className={`w-full py-2.5 rounded-xl text-sm font-medium transition-all border ${
+                      copied
+                        ? "bg-green-500/10 border-green-500/30 text-green-400"
+                        : "bg-zinc-800/50 border-zinc-700/50 text-zinc-300 hover:bg-zinc-800 hover:border-zinc-600"
+                    }`}
+                  >
+                    {copied ? i("btn_copied") : i("btn_copy")}
+                  </button>
+                </div>
+
+                {/* Downloads */}
+                <div className="bg-zinc-900/80 backdrop-blur-xl rounded-2xl border border-zinc-800/80 p-5 shadow-xl">
+                  <p className="text-[10px] text-zinc-600 uppercase tracking-wider mb-3 font-medium">Downloads</p>
+                  <div className="space-y-2">
+                    {result.videos.map((v) => (
+                      <a
+                        key={v.filename}
+                        href={v.url}
+                        download={v.filename}
+                        className="flex items-center justify-between py-3 px-4 bg-zinc-800/50 hover:bg-zinc-800 border border-zinc-700/30 hover:border-zinc-600/50 rounded-xl text-sm transition-all group"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-orange-500/20 to-red-500/20 flex items-center justify-center">
+                            <svg className="w-4 h-4 text-orange-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                            </svg>
+                          </div>
+                          <div>
+                            <span className="text-zinc-300 font-medium">Clip {v.index}</span>
+                            <span className="text-zinc-600 text-xs ml-2">{Math.round(v.duration)}s</span>
+                          </div>
+                        </div>
+                        <svg className="w-4 h-4 text-zinc-600 group-hover:text-zinc-400 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                        </svg>
+                      </a>
+                    ))}
+                  </div>
+                </div>
+
+                {currentVideo?.reason && (
+                  <div className="px-4 py-3 rounded-xl border border-zinc-800/40 bg-zinc-900/40">
+                    <p className="text-[10px] text-zinc-600 uppercase tracking-wider mb-1">Selection reason</p>
+                    <p className="text-zinc-500 text-xs leading-relaxed">{currentVideo.reason}</p>
                   </div>
                 )}
               </div>
             </div>
+          </div>
+        ) : (
+          /* ═══ INPUT VIEW ═══ */
+          <div className="max-w-lg mx-auto">
+            <div className="bg-zinc-900/60 backdrop-blur-xl rounded-3xl border border-zinc-800/60 p-6 sm:p-8 shadow-2xl shadow-black/30">
+              {/* Mode tabs */}
+              <div className="flex gap-1 bg-zinc-800/50 p-1 rounded-xl mb-6">
+                {(["youtube", "upload"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setInputMode(mode)}
+                    className={`flex-1 py-2 rounded-lg text-xs font-medium transition-all ${
+                      inputMode === mode
+                        ? "bg-zinc-700/80 text-white shadow-sm"
+                        : "text-zinc-500 hover:text-zinc-400"
+                    }`}
+                  >
+                    {mode === "youtube" ? "YouTube URL" : "Upload"}
+                  </button>
+                ))}
+              </div>
 
-            {/* Info panel - 2 cols */}
-            <div className="lg:col-span-2 space-y-4">
-              {/* Title & Caption */}
-              <div className="bg-gray-900 rounded-2xl p-5 border border-gray-800">
-                <h2 className="font-bold text-lg mb-3">{result.title}</h2>
-                <p className="text-gray-300 text-sm leading-relaxed whitespace-pre-wrap mb-4">
-                  {result.description}
-                </p>
-                <div className="flex flex-wrap gap-1.5 mb-4">
-                  {result.hashtags.map((tag) => (
-                    <span key={tag} className="px-2 py-0.5 bg-gray-800 text-gray-300 rounded text-xs">
-                      #{tag}
-                    </span>
-                  ))}
+              {/* YouTube input */}
+              {inputMode === "youtube" && (
+                <div className="mb-5">
+                  <label className="block text-[10px] text-zinc-500 uppercase tracking-wider mb-2 font-medium">Video URL</label>
+                  <input
+                    type="url"
+                    value={youtubeUrl}
+                    onChange={(e) => setYoutubeUrl(e.target.value)}
+                    placeholder="https://www.youtube.com/watch?v=..."
+                    className="w-full px-4 py-3 bg-zinc-800/50 border border-zinc-700/50 rounded-xl text-white placeholder-zinc-600 focus:outline-none focus:border-orange-500/40 focus:ring-2 focus:ring-orange-500/10 text-sm transition-all"
+                    disabled={isProcessing}
+                  />
                 </div>
+              )}
+
+              {/* Upload input */}
+              {inputMode === "upload" && (
+                <div className="mb-5">
+                  <label className="block text-[10px] text-zinc-500 uppercase tracking-wider mb-2 font-medium">Video file</label>
+                  <div
+                    onClick={() => fileRef.current?.click()}
+                    className={`border rounded-xl p-6 text-center cursor-pointer transition-all ${
+                      file
+                        ? "border-orange-500/30 bg-orange-500/5"
+                        : "border-zinc-700/50 border-dashed hover:border-zinc-600 bg-zinc-800/30"
+                    }`}
+                  >
+                    {previewUrl ? (
+                      <video src={previewUrl} className="max-h-32 mx-auto rounded-lg mb-2" controls muted />
+                    ) : (
+                      <>
+                        <div className="w-10 h-10 rounded-xl bg-zinc-800 flex items-center justify-center mx-auto mb-3">
+                          <svg className="w-5 h-5 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                          </svg>
+                        </div>
+                        <p className="text-zinc-500 text-xs">Click to upload</p>
+                        <p className="text-zinc-700 text-[10px] mt-1">MP4, MOV up to 200MB</p>
+                      </>
+                    )}
+                    {file && <p className="text-[10px] text-zinc-600 mt-2">{file.name}</p>}
+                    <input ref={fileRef} type="file" accept="video/*" onChange={handleFileChange} className="hidden" />
+                  </div>
+                </div>
+              )}
+
+              {/* Custom prompt toggle */}
+              <div className="mb-6">
                 <button
                   type="button"
-                  onClick={copyCaption}
-                  className="w-full py-2.5 bg-gray-800 hover:bg-gray-700 rounded-xl text-sm font-medium transition-colors"
+                  onClick={() => setShowPrompt(!showPrompt)}
+                  className="flex items-center gap-2 text-[10px] text-zinc-500 uppercase tracking-wider font-medium hover:text-zinc-400 transition-colors"
                 >
-                  {copiedIdx === -1 ? "Copied!" : "Copy caption"}
-                </button>
-              </div>
-
-              {/* Download */}
-              <div className="bg-gray-900 rounded-2xl p-5 border border-gray-800">
-                <h3 className="text-sm font-medium text-gray-400 mb-3">Download</h3>
-                <div className="space-y-2">
-                  {result.videos.map((v) => (
-                    <a
-                      key={v.filename}
-                      href={v.url}
-                      download={v.filename}
-                      className="flex items-center justify-between py-2.5 px-4 bg-gray-800 hover:bg-gray-700 rounded-xl text-sm transition-colors"
-                    >
-                      <span>Clip {v.index} - {Math.round(v.duration)}s</span>
-                      <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                      </svg>
-                    </a>
-                  ))}
-                </div>
-              </div>
-
-              {/* Clip info */}
-              {currentVideo?.reason && (
-                <div className="bg-gray-900/50 rounded-2xl p-4 border border-gray-800/50">
-                  <p className="text-xs text-gray-500">Why this clip:</p>
-                  <p className="text-sm text-gray-400 mt-1">{currentVideo.reason}</p>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      ) : (
-        /* ── Input View ── */
-        <div className="max-w-xl mx-auto space-y-6">
-          {/* Mode Tabs */}
-          <div className="flex gap-1 bg-gray-900/80 p-1 rounded-xl">
-            {(["upload", "youtube"] as const).map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                onClick={() => setInputMode(mode)}
-                className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all ${
-                  inputMode === mode
-                    ? "bg-gray-800 text-white shadow-sm"
-                    : "text-gray-500 hover:text-gray-300"
-                }`}
-              >
-                {mode === "upload" ? "Upload Video" : "YouTube URL"}
-              </button>
-            ))}
-          </div>
-
-          {/* Upload */}
-          {inputMode === "upload" && (
-            <div
-              onClick={() => fileRef.current?.click()}
-              className={`border border-dashed rounded-2xl p-10 text-center cursor-pointer transition-all ${
-                file
-                  ? "border-orange-500/40 bg-orange-500/5"
-                  : "border-gray-800 hover:border-gray-600 bg-gray-900/30"
-              }`}
-            >
-              {previewUrl ? (
-                <video src={previewUrl} className="max-h-40 mx-auto rounded-xl mb-3" controls muted />
-              ) : (
-                <div className="py-2">
-                  <svg className="w-10 h-10 mx-auto text-gray-600 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                  <svg className={`w-3 h-3 transition-transform ${showPrompt ? "rotate-90" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                   </svg>
-                  <p className="text-gray-400 text-sm">Click to upload or drag video here</p>
-                  <p className="text-gray-600 text-xs mt-1">MP4, MOV up to 200MB</p>
+                  Custom instructions
+                </button>
+                {showPrompt && (
+                  <textarea
+                    value={customPrompt}
+                    onChange={(e) => setCustomPrompt(e.target.value)}
+                    placeholder="e.g. 面白い部分だけ切り抜いて, 感動的なシーンを選んで..."
+                    rows={2}
+                    className="w-full mt-2 px-4 py-3 bg-zinc-800/50 border border-zinc-700/50 rounded-xl text-white placeholder-zinc-600 focus:outline-none focus:border-orange-500/40 text-sm resize-none transition-all"
+                    disabled={isProcessing}
+                  />
+                )}
+              </div>
+
+              {/* Generate button */}
+              <button
+                type="button"
+                onClick={handleSubmit}
+                disabled={!canSubmit || isProcessing || isSubmitting}
+                className="relative w-full py-3.5 rounded-xl font-semibold text-sm transition-all overflow-hidden disabled:cursor-not-allowed group"
+              >
+                <div className={`absolute inset-0 transition-opacity ${!canSubmit || isProcessing ? "opacity-0" : "opacity-100"}`}>
+                  <div className="absolute inset-0 bg-gradient-to-r from-orange-500 via-red-500 to-rose-500" style={{ backgroundSize: "200% 200%", animation: "gradient-shift 3s ease infinite" }} />
+                </div>
+                <div className={`absolute inset-0 bg-zinc-800 transition-opacity ${!canSubmit || isProcessing ? "opacity-100" : "opacity-0"}`} />
+                <span className={`relative z-10 ${!canSubmit || isProcessing ? "text-zinc-600" : "text-white"}`}>
+                  {isSubmitting ? i("btn_sending") : isProcessing ? i("btn_generating") : i("btn_generate")}
+                </span>
+                {!isProcessing && canSubmit && !isSubmitting && (
+                  <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                )}
+              </button>
+
+              {/* Processing state */}
+              {isProcessing && (
+                <div className="mt-5 space-y-4">
+                  <div className="flex gap-1">
+                    {STEPS.map((step, i) => {
+                      const currentStep = getStepIndex(job?.progress || "");
+                      const isActive = i === currentStep;
+                      const isDone = i < currentStep;
+                      return (
+                        <div key={step.key} className="flex-1">
+                          <div className={`h-1 rounded-full transition-all duration-500 ${
+                            isDone ? "bg-gradient-to-r from-orange-500 to-red-500" :
+                            isActive ? "bg-gradient-to-r from-orange-500 to-red-500 animate-pulse" :
+                            "bg-zinc-800"
+                          }`} />
+                          <p className={`text-[9px] mt-1.5 text-center transition-colors ${
+                            isActive ? "text-orange-400" : isDone ? "text-zinc-500" : "text-zinc-700"
+                          }`}>
+                            {step.label}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="text-center text-xs text-zinc-500">{job?.progress}</p>
                 </div>
               )}
-              {file && <p className="text-xs text-gray-500 mt-2">{file.name}</p>}
-              <input ref={fileRef} type="file" accept="video/*" onChange={handleFileChange} className="hidden" />
+
+              {/* Error */}
+              {job?.status === "failed" && (
+                <div className="mt-5 p-4 bg-red-500/5 border border-red-500/10 rounded-xl">
+                  <p className="text-red-400 text-xs font-medium">{job.error}</p>
+                  <button type="button" onClick={reset} className="mt-2 text-[10px] text-zinc-500 hover:text-zinc-400 underline underline-offset-2">
+                    Try again
+                  </button>
+                </div>
+              )}
             </div>
-          )}
 
-          {/* YouTube URL */}
-          {inputMode === "youtube" && (
-            <input
-              type="url"
-              value={youtubeUrl}
-              onChange={(e) => setYoutubeUrl(e.target.value)}
-              placeholder="https://www.youtube.com/watch?v=..."
-              className="w-full px-4 py-3.5 bg-gray-900/80 border border-gray-800 rounded-xl text-white placeholder-gray-600 focus:outline-none focus:border-orange-500/50 focus:ring-1 focus:ring-orange-500/30 text-sm"
-              disabled={isProcessing}
-            />
-          )}
-
-          {/* Custom Prompt */}
-          <div>
-            <textarea
-              value={customPrompt}
-              onChange={(e) => setCustomPrompt(e.target.value)}
-              placeholder="(Optional) Custom instructions - e.g. 面白い部分だけ切り抜いて, 感動的なシーンを選んで..."
-              rows={2}
-              className="w-full px-4 py-3 bg-gray-900/80 border border-gray-800 rounded-xl text-white placeholder-gray-600 focus:outline-none focus:border-orange-500/50 focus:ring-1 focus:ring-orange-500/30 text-sm resize-none"
-              disabled={isProcessing}
-            />
+            {/* Subtle features list */}
+            <div className="mt-8 grid grid-cols-3 gap-4 px-2">
+              {[
+                { label: "Auto Genre", desc: "AI detects content type" },
+                { label: "Smart Clips", desc: "Best 30-60s highlights" },
+                { label: "Pro Telops", desc: "Japanese TV-style text" },
+              ].map((f) => (
+                <div key={f.label} className="text-center">
+                  <p className="text-[10px] text-zinc-400 font-medium">{f.label}</p>
+                  <p className="text-[9px] text-zinc-600 mt-0.5">{f.desc}</p>
+                </div>
+              ))}
+            </div>
           </div>
-
-          {/* Generate */}
-          <button
-            type="button"
-            onClick={handleSubmit}
-            disabled={!canSubmit || isProcessing || isSubmitting}
-            className="w-full py-4 bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 disabled:from-gray-800 disabled:to-gray-800 disabled:text-gray-600 disabled:cursor-not-allowed rounded-xl font-semibold transition-all"
-          >
-            {isSubmitting
-              ? "Sending..."
-              : isProcessing
-              ? "Generating..."
-              : "Generate Shorts"}
-          </button>
-
-          {/* Progress */}
-          {isProcessing && (
-            <div className="bg-gray-900/80 rounded-xl p-5 border border-gray-800">
-              <div className="flex items-center gap-3">
-                <div className="w-4 h-4 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
-                <span className="text-sm text-gray-300">{job?.progress}</span>
-              </div>
-              <div className="mt-3 w-full bg-gray-800 rounded-full h-1">
-                <div className="bg-gradient-to-r from-orange-500 to-red-500 h-1 rounded-full animate-pulse w-3/4" />
-              </div>
-            </div>
-          )}
-
-          {job?.status === "failed" && (
-            <div className="bg-red-950/50 border border-red-900/50 rounded-xl p-5">
-              <p className="text-red-400 text-sm font-medium">Error</p>
-              <p className="text-red-300/80 text-sm mt-1">{job.error}</p>
-              <button type="button" onClick={reset} className="mt-3 text-xs text-orange-400 hover:text-orange-300">
-                Try again
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-    </main>
+        )}
+      </main>
+    </div>
   );
 }
