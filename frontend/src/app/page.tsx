@@ -40,11 +40,18 @@ type JobStatus = {
 };
 
 /* ── Step indicator for processing ── */
-const STEPS = [
-  { key: "download", label: "Downloading" },
-  { key: "transcribe", label: "Transcribing" },
-  { key: "analyze", label: "AI Analyzing" },
-  { key: "render", label: "Rendering" },
+const STEPS_JA = [
+  { key: "download", label: "ダウンロード" },
+  { key: "transcribe", label: "文字起こし" },
+  { key: "analyze", label: "AI分析" },
+  { key: "render", label: "動画生成" },
+] as const;
+
+const STEPS_EN = [
+  { key: "download", label: "Download" },
+  { key: "transcribe", label: "Transcribe" },
+  { key: "analyze", label: "Analyze" },
+  { key: "render", label: "Render" },
 ] as const;
 
 function getStepIndex(progress: string): number {
@@ -145,7 +152,8 @@ export default function Home() {
   const isProcessing = job?.status === "processing";
   const result = job?.result;
   const canSubmit = inputMode === "upload" ? !!file : !!youtubeUrl.trim();
-  const currentVideo = result?.videos?.[activeVideo];
+  const videos = result?.videos ?? [];
+  const currentVideo = videos[activeVideo];
 
   const copyCaption = () => {
     if (!result) return;
@@ -210,7 +218,7 @@ export default function Home() {
                   <span className="w-1.5 h-1.5 rounded-full bg-orange-400" />
                   {result.genre_ja}
                 </span>
-                <span className="text-zinc-600 text-xs">{result.videos.length} clips</span>
+                <span className="text-zinc-600 text-xs">{videos.length} {i("label_clips")}</span>
               </div>
               <button type="button" onClick={reset} className="px-4 py-1.5 text-xs text-zinc-500 hover:text-white border border-zinc-800 hover:border-zinc-700 rounded-lg transition-all hover:bg-zinc-900">
                 {i("btn_new")}
@@ -226,9 +234,9 @@ export default function Home() {
                       <video key={currentVideo.url} src={currentVideo.url} controls autoPlay className="w-full h-full object-contain" />
                     )}
                   </div>
-                  {result.videos.length > 1 && (
+                  {videos.length > 1 && (
                     <div className="flex gap-2 p-3 border-t border-zinc-800/50">
-                      {result.videos.map((v, i) => (
+                      {videos.map((v, i) => (
                         <button
                           key={v.filename}
                           type="button"
@@ -239,7 +247,7 @@ export default function Home() {
                               : "bg-zinc-800/80 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800"
                           }`}
                         >
-                          Clip {v.index}
+                          {lang === "ja" ? `${v.index}` : `Clip ${v.index}`}
                           <span className="ml-1 opacity-60">{Math.round(v.duration)}s</span>
                         </button>
                       ))}
@@ -277,9 +285,9 @@ export default function Home() {
 
                 {/* Downloads */}
                 <div className="bg-zinc-900/80 backdrop-blur-xl rounded-2xl border border-zinc-800/80 p-5 shadow-xl">
-                  <p className="text-[10px] text-zinc-600 uppercase tracking-wider mb-3 font-medium">Downloads</p>
+                  <p className="text-[10px] text-zinc-600 uppercase tracking-wider mb-3 font-medium">{i("label_downloads")}</p>
                   <div className="space-y-2">
-                    {result.videos.map((v) => (
+                    {videos.map((v) => (
                       <a
                         key={v.filename}
                         href={v.url}
@@ -293,7 +301,7 @@ export default function Home() {
                             </svg>
                           </div>
                           <div>
-                            <span className="text-zinc-300 font-medium">Clip {v.index}</span>
+                            <span className="text-zinc-300 font-medium">{lang === "ja" ? `${v.index}` : `Clip ${v.index}`}</span>
                             <span className="text-zinc-600 text-xs ml-2">{Math.round(v.duration)}s</span>
                           </div>
                         </div>
@@ -307,7 +315,7 @@ export default function Home() {
 
                 {currentVideo?.reason && (
                   <div className="px-4 py-3 rounded-xl border border-zinc-800/40 bg-zinc-900/40">
-                    <p className="text-[10px] text-zinc-600 uppercase tracking-wider mb-1">Selection reason</p>
+                    <p className="text-[10px] text-zinc-600 uppercase tracking-wider mb-1">{i("label_reason")}</p>
                     <p className="text-zinc-500 text-xs leading-relaxed">{currentVideo.reason}</p>
                   </div>
                 )}
@@ -331,7 +339,7 @@ export default function Home() {
                         : "text-zinc-500 hover:text-zinc-400"
                     }`}
                   >
-                    {mode === "youtube" ? "YouTube URL" : "Upload"}
+                    {mode === "youtube" ? i("tab_youtube") : i("tab_upload")}
                   </button>
                 ))}
               </div>
@@ -339,7 +347,7 @@ export default function Home() {
               {/* YouTube input */}
               {inputMode === "youtube" && (
                 <div className="mb-5">
-                  <label className="block text-[10px] text-zinc-500 uppercase tracking-wider mb-2 font-medium">Video URL</label>
+                  <label className="block text-[10px] text-zinc-500 uppercase tracking-wider mb-2 font-medium">{i("label_url")}</label>
                   <input
                     type="url"
                     value={youtubeUrl}
@@ -354,7 +362,7 @@ export default function Home() {
               {/* Upload input */}
               {inputMode === "upload" && (
                 <div className="mb-5">
-                  <label className="block text-[10px] text-zinc-500 uppercase tracking-wider mb-2 font-medium">Video file</label>
+                  <label className="block text-[10px] text-zinc-500 uppercase tracking-wider mb-2 font-medium">{i("label_file")}</label>
                   <div
                     onClick={() => fileRef.current?.click()}
                     className={`border rounded-xl p-6 text-center cursor-pointer transition-all ${
@@ -372,8 +380,8 @@ export default function Home() {
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                           </svg>
                         </div>
-                        <p className="text-zinc-500 text-xs">Click to upload</p>
-                        <p className="text-zinc-700 text-[10px] mt-1">MP4, MOV up to 200MB</p>
+                        <p className="text-zinc-500 text-xs">{i("label_upload_click")}</p>
+                        <p className="text-zinc-700 text-[10px] mt-1">{i("label_upload_hint")}</p>
                       </>
                     )}
                     {file && <p className="text-[10px] text-zinc-600 mt-2">{file.name}</p>}
@@ -392,13 +400,13 @@ export default function Home() {
                   <svg className={`w-3 h-3 transition-transform ${showPrompt ? "rotate-90" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                   </svg>
-                  Custom instructions
+                  {i("label_custom")}
                 </button>
                 {showPrompt && (
                   <textarea
                     value={customPrompt}
                     onChange={(e) => setCustomPrompt(e.target.value)}
-                    placeholder="e.g. 面白い部分だけ切り抜いて, 感動的なシーンを選んで..."
+                    placeholder={i("placeholder_prompt")}
                     rows={2}
                     className="w-full mt-2 px-4 py-3 bg-zinc-800/50 border border-zinc-700/50 rounded-xl text-white placeholder-zinc-600 focus:outline-none focus:border-orange-500/40 text-sm resize-none transition-all"
                     disabled={isProcessing}
@@ -429,7 +437,7 @@ export default function Home() {
               {isProcessing && (
                 <div className="mt-5 space-y-4">
                   <div className="flex gap-1">
-                    {STEPS.map((step, i) => {
+                    {(lang === "en" ? STEPS_EN : STEPS_JA).map((step, i) => {
                       const currentStep = getStepIndex(job?.progress || "");
                       const isActive = i === currentStep;
                       const isDone = i < currentStep;
@@ -458,7 +466,7 @@ export default function Home() {
                 <div className="mt-5 p-4 bg-red-500/5 border border-red-500/10 rounded-xl">
                   <p className="text-red-400 text-xs font-medium">{job.error}</p>
                   <button type="button" onClick={reset} className="mt-2 text-[10px] text-zinc-500 hover:text-zinc-400 underline underline-offset-2">
-                    Try again
+                    {i("btn_try_again")}
                   </button>
                 </div>
               )}
@@ -467,9 +475,9 @@ export default function Home() {
             {/* Subtle features list */}
             <div className="mt-8 grid grid-cols-3 gap-4 px-2">
               {[
-                { label: "Auto Genre", desc: "AI detects content type" },
-                { label: "Smart Clips", desc: "Best 30-60s highlights" },
-                { label: "Pro Telops", desc: "Japanese TV-style text" },
+                { label: i("feat_genre"), desc: i("feat_genre_desc") },
+                { label: i("feat_clips"), desc: i("feat_clips_desc") },
+                { label: i("feat_telop"), desc: i("feat_telop_desc") },
               ].map((f) => (
                 <div key={f.label} className="text-center">
                   <p className="text-[10px] text-zinc-400 font-medium">{f.label}</p>
