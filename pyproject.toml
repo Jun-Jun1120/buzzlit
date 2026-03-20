@@ -1,0 +1,18 @@
+[project]
+name = "buzzlit"
+version = "0.1.0"
+description = "AI-powered short video generator for local businesses"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn>=0.34.0",
+    "python-dotenv>=1.0.0",
+    "google-genai>=1.0.0",
+    "faster-whisper>=1.1.0",
+    "python-multipart>=0.0.20",
+    "nvidia-cublas-cu12>=12.6.0",
+    "nvidia-cudnn-cu12>=9.0.0",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.0.0"]
